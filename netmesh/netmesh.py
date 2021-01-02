@@ -26,6 +26,7 @@ class NodeAlreadyExists(RuntimeError):
 			ret = f"Node {self.otherid} already marked as parent of id: {self.thisid}"
 		else:
 			ret = f"Node {self.otherid} already marked as child of id: {self.thisid}"
+		return ret
 
 class MissingNodeIDsError(RuntimeError):
 	def __init__(self, p_ids):
@@ -191,15 +192,15 @@ class DirectedMesh(object):
 		self.checkIDs(node.parentids)
 		self.checkIDs(node.childrenids)
 		
-		lparents = [self.nodes[pid] for pid in node.parentids]
-		lchildren = [self.nodes[pid] for pid in node.childrenids]
+		#lparents = [self.nodes[pid] for pid in node.parentids]
+		#lchildren = [self.nodes[pid] for pid in node.childrenids]
 
 		self.nodes[node.id] = node
 		
 		if len(node.parentids) == 0:
 			# New root
 			if len(node.childrenids) > 0:
-				roots_to_cancel = set(node.childrenids).intersect(set(self.rootids))
+				roots_to_cancel = set(node.childrenids).intersection(set(self.rootids))
 				for rtc in roots_to_cancel:
 					self.rootids.remove(rtc)
 			self.rootids.append(node.id)
