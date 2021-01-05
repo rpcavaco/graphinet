@@ -1,5 +1,6 @@
 
 import pytest
+#import pdb
 
 from graphinet.diagramming import AxisType, LinearAxis, QuantizedAxis, \
 	ValueOutOfRange, BaseLayout, OuterRim, Pt
@@ -12,6 +13,7 @@ class TestClass:
 		with pytest.raises(ValueOutOfRange):
 			x = la.getPosition(12, doraise=True)
 		assert la.getPosition(12) is None
+		#pdb.set_trace()
 		assert la.getPosition(60) == 250
 
 		la.setValuesDomain(40, 120)
@@ -21,9 +23,16 @@ class TestClass:
 		qa = QuantizedAxis(1000, 2, minspace=100)
 		qa.setValuesDomainSize(40, 120)
 		assert qa.getPosition(50, doraise=True) == 325
-		assert qa.getPositionFromQuantile(1, doraise=True) == 775
+		assert qa.getPositionFromQuantile(1) == 775
 		with pytest.raises(ValueOutOfRange):
-			x = qa.getPositionFromQuantile(2, doraise=True)
+			x = qa.getPositionFromQuantile(2)
+
+	def test_quantaxis2(self): #, capsys):
+		qa = QuantizedAxis(1000, 2, minspace=100, inverted=True)
+		qa.setValuesDomainSize(40, 120)
+		#with capsys.disabled():
+		assert qa.getPosition(50, doraise=True) == 775
+		assert qa.getPositionFromQuantile(0) == 775
 
 	#def test_blayout(self, capsys):
 	def test_blayout1(self):
@@ -62,4 +71,12 @@ class TestClass:
 		#with capsys.disabled():
 		bl.basicLinearIdentInit(doraise=True)
 		assert bl.getPosition(Pt(20, 400), doraise=True) == (20, 400)
+
+	def test_blayout4(self): #, capsys):
+		bl = BaseLayout(1200, 700)
+		bl.setOuterRim(OuterRim(top=5, bottom=4))
+		ya = bl.addLinearYAxis(invert=True, doraise=True)
+		ya.setValuesDomain(80, 240)
+		#with capsys.disabled():
+		assert ya.getPosition(120, doraise=True) == 522
 

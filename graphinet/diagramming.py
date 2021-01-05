@@ -74,8 +74,9 @@ class OuterRim(object):
 
 class BaseAxis(object):
 
-	def __init__(self, maxspace: int, minspace: Optional[int] = 0) -> None:
+	def __init__(self, maxspace: int, minspace: Optional[int] = 0, inverted: Optional[bool] = False) -> None:
 		assert maxspace > minspace
+		self.inverted = inverted
 		self.minspace = minspace
 		self.maxspace = maxspace
 		self.minv = None
@@ -86,9 +87,9 @@ class BaseAxis(object):
 		return f"axis minspace:{self.minspace} maxspace:{self.maxspace} minv:{self.minv} maxv:{self.maxv} size:{self.sizev}"
 
 	def setIdentValuesDomain(self) -> None:
-		self.minv = self.minspace
-		self.sizev = self.maxspace - self.minspace
-		self.maxv = self.maxspace
+		self.minv = min(self.minspace, self.maxspace)
+		self.sizev = abs(self.maxspace - self.minspace)
+		self.maxv = max(self.minspace, self.maxspace)
 
 	def getValuesDomain(self):
 		return self.minv, self.maxv
@@ -97,6 +98,7 @@ class BaseAxis(object):
 		raise NotImplementedError()
 
 class LinearAxis(BaseAxis):
+
 	def __repr__(self) -> str:
 		return f"Linear {super().__repr__()}"
 
@@ -127,7 +129,10 @@ class LinearAxis(BaseAxis):
 				raise ValueOutOfRange(p_rawvalue, self.minv, self.maxv)
 		else:
 			m = delta / self.sizev
-			ret = self.minspace + round(m * (self.maxspace - self.minspace))
+			if self.inverted:
+				ret = self.maxspace - round(m * (self.maxspace - self.minspace))
+			else:
+				ret = self.minspace + round(m * (self.maxspace - self.minspace))
 
 			if DO_PRINT_LOG:
 				print("m:", m, "delta:", delta, "self.sizev:", self.sizev)
@@ -137,8 +142,8 @@ class LinearAxis(BaseAxis):
 		
 class QuantizedAxis(LinearAxis):
 
-	def __init__(self, maxspace: int, nquantiles: int, minspace: Optional[int]) -> None:
-		super().__init__(maxspace, minspace=minspace)
+	def __init__(self, maxspace: int, nquantiles: int, minspace: Optional[int], inverted: Optional[bool] = False) -> None:
+		super().__init__(maxspace, minspace=minspace, inverted=inverted)
 		assert nquantiles > 0, f"nquantiles must be greater than zero: value given {nquantiles}"
 		self.nquantiles = nquantiles
 		self.qsz = None
@@ -162,27 +167,30 @@ class QuantizedAxis(LinearAxis):
 		super().setIdentValuesDomain()
 		self._calcQSize()
 
-	def getPositionFromQuantile(self, p_quantile: int, doraise: Optional[bool] = False) -> Union[None, int]:
+	def getPositionFromQuantile(self, p_quantile: int) -> int:
 		"If predefined quantiles are 2, p_quantile values admissible are 0 & 1"
 
-		DO_PRINT_LOG = False
+		DO_PRINT_LOG = True
 
 		if p_quantile < 0 or p_quantile >= self.nquantiles:
 			raise ValueOutOfRange(p_quantile, 0, self.nquantiles-1)
-		ret = None
 
 		if self.minv is None:
 			raise MissingValuesDomain("minimum")
 		if self.sizev is None:
 			raise MissingValuesDomain("size")
 
-		if p_quantile == 0:
+		quantile = p_quantile
+		if quantile == 0:
 			delta = self.qsz / 2.0
 		else:
-			delta = p_quantile * self.qsz + self.qsz / 2.0
+			delta = (quantile + 0.5) * self.qsz
 
 		m = delta / self.sizev
-		ret = self.minspace + round(m * (self.maxspace - self.minspace))
+		if self.inverted:
+			ret = self.maxspace - round(m * (self.maxspace - self.minspace))
+		else:
+			ret = self.minspace + round(m * (self.maxspace - self.minspace))
 
 		if DO_PRINT_LOG:
 			print("m:", m, "delta:", delta, "self.sizev:", self.sizev)
@@ -197,7 +205,7 @@ class QuantizedAxis(LinearAxis):
 		qnt, rem = divmod(testv, self.qsz)
 		if qnt > 0 and rem == 0:
 			qnt -= 1
-		return self.getPositionFromQuantile(qnt, doraise=doraise)
+		return self.getPositionFromQuantile(qnt)
 		
 
 class BaseLayout(object):
@@ -228,6 +236,7 @@ class BaseLayout(object):
 
 	def _addAxis(self, is_x: bool, doraise: Optional[bool] = False, 
 		newtype: Optional[AxisType] = AxisType.NONE, 
+		invert: Optional[bool] = False, 
 		auxdata: Optional[Dict] = None) -> Union[None, BaseAxis]:
 
 		axisClasses = {
@@ -259,9 +268,9 @@ class BaseLayout(object):
 					maxspace = self.origin.y + self.height
 
 			if newtype == AxisType.LINEAR:
-				the_axis_ptr.append(the_class(maxspace, minspace))
+				the_axis_ptr.append(the_class(maxspace, minspace=minspace, inverted=invert))
 			elif newtype == AxisType.QUANTIZED:
-				the_axis_ptr.append(the_class(maxspace, auxdata["quantiles"], minspace))
+				the_axis_ptr.append(the_class(maxspace, auxdata["quantiles"], minspace=minspace, inverted=invert))
 			else:
 				raise NotImplementedError(f"missing implementation for type {newtype}")
 
@@ -280,14 +289,14 @@ class BaseLayout(object):
 	def addLinearXAxis(self, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
 		return self._addAxis(True, doraise=doraise, newtype=AxisType.LINEAR)
 
-	def addLinearYAxis(self, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
-		return self._addAxis(False, doraise=doraise, newtype=AxisType.LINEAR)
+	def addLinearYAxis(self, invert: Optional[bool] = False, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
+		return self._addAxis(False, doraise=doraise, newtype=AxisType.LINEAR, invert=invert)
 
 	def addQuantizedXAxis(self, nquantiles: int, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
 		return self._addAxis(True, doraise=doraise, newtype=AxisType.QUANTIZED, auxdata={"quantiles": nquantiles})
 
-	def addQuantizedYAxis(self, nquantiles: int, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
-		return self._addAxis(False, doraise=doraise, newtype=AxisType.QUANTIZED, auxdata={"quantiles": nquantiles})
+	def addQuantizedYAxis(self, nquantiles: int, invert: Optional[bool] = False, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
+		return self._addAxis(False, doraise=doraise, newtype=AxisType.QUANTIZED, invert=invert, auxdata={"quantiles": nquantiles})
 
 	def basicLinearIdentInit(self, doraise: Optional[bool] = False):
 		if len(self.xaxis) > 0 and len(self.xaxis) > 0:
@@ -337,7 +346,7 @@ class BaseLayout(object):
 		ret = None
 		if not xa is None and not ya is None:
 			ret = (xa.getPosition(p_pointvalue.x, doraise=doraise),
-					xa.getPosition(p_pointvalue.y, doraise=doraise))
+					ya.getPosition(p_pointvalue.y, doraise=doraise))
 		
 		return ret
 
