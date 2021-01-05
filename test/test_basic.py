@@ -27,7 +27,7 @@ class TestClass:
 
 	def test_root(self, prepared_dag):
 		assert prepared_dag.rootids == ['zeroot']
-
+		
 	def test_nodes(self, prepared_dag):
 		assert len(prepared_dag.getNode("zeroot").getParentIds()) == 0
 		assert set(prepared_dag.getNode("zeroot").getChildrenIds()) == set(['zefilhoa', 'zefilhob'])
