@@ -19,14 +19,35 @@ class MissingValuesDomain(RuntimeError):
 	def __str__(self):
 		return f"Axis value domain definition: {self.paramname} is missing"
 
-class AxisUndefined(RuntimeError):
-	def __init__(self, p_is_x):
+class NoSuchAxisIndex(RuntimeError):
+	def __init__(self, p_is_x, p_idx):
 		self.is_x = p_is_x
+		self.idx = p_idx
 	def __str__(self):
 		if self.is_x:
-			return f"X axis is not defined, invoke getAxis with axis type option"
+			orient = "X"
 		else:
-			return f"Y axis is not defined, invoke getAxis with axis type option"
+			orient = "Y"
+		return f"Invalid {orient} axis index: {self.idx} is missing"
+
+class LayoutAlreadyInited(RuntimeError):
+	def __str__(self):
+		return f"Layout with one or more axis already"
+
+class InvalidAxisType(RuntimeError):
+	def __init__(self, p_type):
+		self.the_type = p_type
+	def __str__(self):
+		return f"Invalid axis type: {self.the_type}"
+
+# class AxisUndefined(RuntimeError):
+# 	def __init__(self, p_is_x):
+# 		self.is_x = p_is_x
+# 	def __str__(self):
+# 		if self.is_x:
+# 			return f"X axis is not defined, invoke addXXXAxis with axis type option"
+# 		else:
+# 			return f"Y axis is not defined, invoke addXXXAxis with axis type option"
 
 
 class ValueOutOfRange(RuntimeError):
@@ -61,6 +82,9 @@ class BaseAxis(object):
 		self.sizev = None
 		self.maxv = None
 
+	def __repr__(self) -> str:
+		return f"axis minspace:{self.minspace} maxspace:{self.maxspace} minv:{self.minv} maxv:{self.maxv} size:{self.sizev}"
+
 	def setIdentValuesDomain(self) -> None:
 		self.minv = self.minspace
 		self.sizev = self.maxspace - self.minspace
@@ -69,10 +93,12 @@ class BaseAxis(object):
 	def getValuesDomain(self):
 		return self.minv, self.maxv
 
-	def getValue(self, p_rawvalue: Union[float, int], doraise: Optional[bool] = False) -> Union[None, int]:
+	def getPosition(self, p_rawvalue: Union[float, int], doraise: Optional[bool] = False) -> Union[None, int]:
 		raise NotImplementedError()
 
 class LinearAxis(BaseAxis):
+	def __repr__(self) -> str:
+		return f"Linear {super().__repr__()}"
 
 	def setValuesDomainSize(self, minimum: Union[float, int], size: Union[float, int]) -> None:
 		self.minv = minimum
@@ -85,7 +111,7 @@ class LinearAxis(BaseAxis):
 		self.sizev = maximum - minimum
 		self.maxv = maximum
 
-	def getValue(self, p_rawvalue: Union[float, int], doraise: Optional[bool] = False) -> Union[None, int]:
+	def getPosition(self, p_rawvalue: Union[float, int], doraise: Optional[bool] = False) -> Union[None, int]:
 
 		DO_PRINT_LOG = False
 
@@ -117,6 +143,9 @@ class QuantizedAxis(LinearAxis):
 		self.nquantiles = nquantiles
 		self.qsz = None
 
+	def __repr__(self) -> str:
+		return f"Quantized {super().__repr__()}"
+
 	def _calcQSize(self) -> None:
 		q = self.sizev / self.nquantiles
 		self.qsz = round(q)
@@ -133,7 +162,7 @@ class QuantizedAxis(LinearAxis):
 		super().setIdentValuesDomain()
 		self._calcQSize()
 
-	def getValueFromQuantile(self, p_quantile: int, doraise: Optional[bool] = False) -> Union[None, int]:
+	def getPositionFromQuantile(self, p_quantile: int, doraise: Optional[bool] = False) -> Union[None, int]:
 		"If predefined quantiles are 2, p_quantile values admissible are 0 & 1"
 
 		DO_PRINT_LOG = False
@@ -161,14 +190,14 @@ class QuantizedAxis(LinearAxis):
 
 		return ret
 
-	def getValue(self, p_rawvalue: Union[float, int], doraise: Optional[bool] = False) -> Union[None, int]:
+	def getPosition(self, p_rawvalue: Union[float, int], doraise: Optional[bool] = False) -> Union[None, int]:
 		"Quantize value and call getValueAtQuantile"
 		assert not self.qsz is None
 		testv = p_rawvalue - self.minv
 		qnt, rem = divmod(testv, self.qsz)
 		if qnt > 0 and rem == 0:
 			qnt -= 1
-		return self.getValueFromQuantile(qnt, doraise=doraise)
+		return self.getPositionFromQuantile(qnt, doraise=doraise)
 		
 
 class BaseLayout(object):
@@ -181,16 +210,23 @@ class BaseLayout(object):
 		else:
 			self.origin = origin
 		self.outer_rim = None
-		self.xaxis = None
-		self.yaxis = None
+		self.xaxis = []
+		self.yaxis = []
+		self.activeXAxis = None
+		self.activeYAxis = None
+
+	def __repr__(self) -> str:
+		return f"layout width:{self.width} height:{self.height} origin:{self.origin}"
 
 	def setOuterRim(self, p_outer_rim: OuterRim) -> None:
 		assert not p_outer_rim is None
 		self.outer_rim = p_outer_rim
-		self.xaxis = None
-		self.yaxis = None
+		del self.xaxis[:]
+		del self.yaxis[:]
+		self.activeXAxis = None
+		self.activeYAxis = None
 
-	def _getAxis(self, is_x: bool, doraise: Optional[bool] = False, 
+	def _addAxis(self, is_x: bool, doraise: Optional[bool] = False, 
 		newtype: Optional[AxisType] = AxisType.NONE, 
 		auxdata: Optional[Dict] = None) -> Union[None, BaseAxis]:
 
@@ -205,65 +241,106 @@ class BaseLayout(object):
 		else:
 			the_axis_ptr = self.yaxis
 
-		if the_axis_ptr is None:
-			if newtype != AxisType.NONE:
-				the_class = axisClasses[newtype]
-				if is_x:
-					if not self.outer_rim is None:
-						minspace = self.outer_rim.l + self.origin.x
-						maxspace = (self.origin.x + self.width) - self.outer_rim.r
-					else:
-						minspace = self.origin.x
-						maxspace = self.origin.x + self.width
+		if newtype != AxisType.NONE:
+			the_class = axisClasses[newtype]
+			if is_x:
+				if not self.outer_rim is None:
+					minspace = self.outer_rim.l + self.origin.x
+					maxspace = (self.origin.x + self.width) - self.outer_rim.r
 				else:
-					if not self.outer_rim is None:
-						minspace = self.outer_rim.b + self.origin.y
-						maxspace = self.origin.y + self.height - self.outer_rim.t
-					else:
-						minspace = self.origin.y
-						maxspace = self.origin.y + self.height
+					minspace = self.origin.x
+					maxspace = self.origin.x + self.width
+			else:
+				if not self.outer_rim is None:
+					minspace = self.outer_rim.b + self.origin.y
+					maxspace = self.origin.y + self.height - self.outer_rim.t
+				else:
+					minspace = self.origin.y
+					maxspace = self.origin.y + self.height
 
-				if newtype == AxisType.LINEAR:
-					if is_x:
-						self.xaxis = the_class(maxspace, minspace)
-					else:
-						self.yaxis = the_class(maxspace, minspace)
-				elif newtype == AxisType.QUANTIZED:
-					if is_x:
-						self.xaxis = the_class(maxspace, auxdata["quantiles"], minspace)
-					else:
-						self.yaxis = the_class(maxspace, auxdata["quantiles"], minspace)
-				else:
-					raise RuntimeError(f"Invalid axis type value: {newtype}")
-				
-				if is_x:
-					ret = self.xaxis
-				else:
-					ret = self.yaxis
+			if newtype == AxisType.LINEAR:
+				the_axis_ptr.append(the_class(maxspace, minspace))
+			elif newtype == AxisType.QUANTIZED:
+				the_axis_ptr.append(the_class(maxspace, auxdata["quantiles"], minspace))
+			else:
+				raise NotImplementedError(f"missing implementation for type {newtype}")
 
-			elif doraise:
-				raise AxisUndefined(is_x)
-		else:
-			ret = the_axis_ptr
+			if len(the_axis_ptr) > 0:
+				if is_x:
+					self.activeXAxis = len(the_axis_ptr) - 1
+				else:
+					self.activeYAxis = len(the_axis_ptr) - 1
+				ret = the_axis_ptr[-1]
+
+		elif doraise:
+			raise InvalidAxisType(newtype)
 
 		return ret
 
-	def getLinearXAxis(self, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
-		return self._getAxis(True, doraise=doraise, newtype=AxisType.LINEAR)
+	def addLinearXAxis(self, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
+		return self._addAxis(True, doraise=doraise, newtype=AxisType.LINEAR)
 
-	def getLinearYAxis(self, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
-		return self._getAxis(False, doraise=doraise, newtype=AxisType.LINEAR)
+	def addLinearYAxis(self, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
+		return self._addAxis(False, doraise=doraise, newtype=AxisType.LINEAR)
 
-	def getQuantizedXAxis(self, nquantiles: int, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
-		return self._getAxis(True, doraise=doraise, newtype=AxisType.QUANTIZED, auxdata={"quantiles": nquantiles})
+	def addQuantizedXAxis(self, nquantiles: int, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
+		return self._addAxis(True, doraise=doraise, newtype=AxisType.QUANTIZED, auxdata={"quantiles": nquantiles})
 
-	def getQuantizedYAxis(self, nquantiles: int, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
-		return self._getAxis(False, doraise=doraise, newtype=AxisType.QUANTIZED, auxdata={"quantiles": nquantiles})
+	def addQuantizedYAxis(self, nquantiles: int, doraise: Optional[bool] = False) -> Union[None, BaseAxis]:
+		return self._addAxis(False, doraise=doraise, newtype=AxisType.QUANTIZED, auxdata={"quantiles": nquantiles})
 
-class GridLayout(BaseLayout):
+	def basicLinearIdentInit(self, doraise: Optional[bool] = False):
+		if len(self.xaxis) > 0 and len(self.xaxis) > 0:
+			raise LayoutAlreadyInited()
+		if len(self.xaxis) < 1:
+			xa = self.addLinearXAxis(doraise=doraise)
+			xa.setIdentValuesDomain()
+		if len(self.yaxis) < 1:
+			ya = self.addLinearYAxis(doraise=doraise)
+			ya.setIdentValuesDomain()
 
-	def __init__(self, w: Union[float, int], h: Union[float, int], xaxis: BaseAxis, yaxis: BaseAxis) -> None:
-		super().__init__(w, h, xaxis, yaxis)
+	def getXAxis(self, p_axisidx: int, activate: Optional[bool] = False, doraise: Optional[bool] = False) -> BaseAxis:
+		ln = len(self.xaxis)
+		ret = None
+		if ln > 0 and p_axisidx < ln:
+			if activate:
+				self.activeXAxis = p_axisidx
+			ret = self.xaxis[p_axisidx]
+		elif doraise:
+			raise NoSuchAxisIndex(True, p_axisidx)
+		return ret
+
+	def getYAxis(self, p_axisidx: int, activate: Optional[bool] = False, doraise: Optional[bool] = False) -> BaseAxis:
+		ln = len(self.yaxis)
+		ret = None
+		if ln > 0 and p_axisidx < ln:
+			if activate:
+				self.activeYAxis = p_axisidx
+			ret = self.yaxis[p_axisidx]
+		elif doraise:
+			raise NoSuchAxisIndex(False, p_axisidx)
+		return ret
+
+	def getPosition(self, p_pointvalue: Pt, xaxisidx: Optional[int] = None, yaxisidx: Optional[int] = None, doraise: Optional[bool] = False):
+		if xaxisidx is None:
+			xai = self.activeXAxis
+		else:
+			xai = xaxisidx
+		if yaxisidx is None:
+			yai = self.activeYAxis
+		else:
+			yai = yaxisidx
+
+		xa = self.getXAxis(xai, doraise=doraise)
+		ya = self.getYAxis(yai, doraise=doraise)
+
+		ret = None
+		if not xa is None and not ya is None:
+			ret = (xa.getPosition(p_pointvalue.x, doraise=doraise),
+					xa.getPosition(p_pointvalue.y, doraise=doraise))
+		
+		return ret
+
 
 if __name__ == "__main__":
 	pass

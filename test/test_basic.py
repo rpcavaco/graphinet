@@ -17,7 +17,7 @@ def prepared_dag():
 class TestClass:
 
 	def test_getnode(self, prepared_dag):
-		with pytest.raises(MissingNodeIDsError) as e_info:
+		with pytest.raises(MissingNodeIDsError):
 			prepared_dag.getNode("xafs", doraise=True)
 		assert prepared_dag.getNode("xifs") == None
 		assert isinstance(prepared_dag.getNode("zenetob"), BaseGraphNode)
@@ -59,5 +59,5 @@ class TestClass:
 		assert set(prepared_dag.getNode("zenetob").getParentIds()) == set(['zeroot','zefilhoa', 'zefilhob'])
 
 	def test_edge2(self, prepared_dag):
-		with pytest.raises(CycleAttemptError) as e_info:
+		with pytest.raises(CycleAttemptError):
 			prepared_dag.addEdge("zenetob", "zeroot", doraise=True)
