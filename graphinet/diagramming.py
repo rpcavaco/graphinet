@@ -1,6 +1,6 @@
 
 from math import ceil
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Tuple
 from collections import namedtuple
 from enum import IntEnum
 
@@ -170,7 +170,7 @@ class QuantizedAxis(LinearAxis):
 	def getPositionFromQuantile(self, p_quantile: int) -> int:
 		"If predefined quantiles are 2, p_quantile values admissible are 0 & 1"
 
-		DO_PRINT_LOG = True
+		DO_PRINT_LOG = False
 
 		if p_quantile < 0 or p_quantile >= self.nquantiles:
 			raise ValueOutOfRange(p_quantile, 0, self.nquantiles-1)
@@ -225,6 +225,9 @@ class BaseLayout(object):
 
 	def __repr__(self) -> str:
 		return f"layout width:{self.width} height:{self.height} origin:{self.origin}"
+
+	def getDims(self) -> Tuple[Union[float, int], Union[float, int]]:
+		return (self.width, self.height)
 
 	def setOuterRim(self, p_outer_rim: OuterRim) -> None:
 		assert not p_outer_rim is None
@@ -330,7 +333,7 @@ class BaseLayout(object):
 			raise NoSuchAxisIndex(False, p_axisidx)
 		return ret
 
-	def getPosition(self, p_pointvalue: Pt, xaxisidx: Optional[int] = None, yaxisidx: Optional[int] = None, doraise: Optional[bool] = False):
+	def getPosition(self, p_pointvalue: Pt, xaxisidx: Optional[int] = None, yaxisidx: Optional[int] = None, fromquantile: Optional[bool] = False, doraise: Optional[bool] = False) -> Pt:
 		if xaxisidx is None:
 			xai = self.activeXAxis
 		else:
@@ -343,10 +346,18 @@ class BaseLayout(object):
 		xa = self.getXAxis(xai, doraise=doraise)
 		ya = self.getYAxis(yai, doraise=doraise)
 
+		if doraise and fromquantile:
+			if not isinstance(xa, QuantizedAxis) or not isinstance(ya, QuantizedAxis):
+				raise ValueError("no fromquantile=True without QuantizedAxis")
+
 		ret = None
 		if not xa is None and not ya is None:
-			ret = (xa.getPosition(p_pointvalue.x, doraise=doraise),
-					ya.getPosition(p_pointvalue.y, doraise=doraise))
+			if fromquantile:
+				ret = Pt(xa.getPositionFromQuantile(p_pointvalue.x),
+						ya.getPositionFromQuantile(p_pointvalue.y))
+			else:
+				ret = Pt(xa.getPosition(p_pointvalue.x, doraise=doraise),
+						ya.getPosition(p_pointvalue.y, doraise=doraise))
 		
 		return ret
 
